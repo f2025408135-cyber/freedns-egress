@@ -283,44 +283,46 @@ async function createHosts(addForm, listingHtml) {
         else if (/address|destination|dest|content|^value$|target/.test(n)) params.set(ff.name, spec.address);
       }
       const label = (d.host || "mail") + "." + d.name;
-      let code = "";
+      params.set("ttlalias", "");
+      let done = false;
       if (sttKey) {
-        for (let att = 1; att <= 3 && !/^[A-Za-z0-9]{6}$/.test(code); att++) {
+        for (let att = 1; att <= 3 && !done; att++) {
+          let uniq = [];
           try {
-            await reqBin("session", BASE + "/securimage/securimage_show.php?" + Math.random());
+            const img = await reqBin("session", BASE + "/securimage/securimage_show.php?" + Math.random());
+            fs.writeFileSync(OUT + "/rec-img-" + results.length + "-a" + att + ".png", img.buf);
             const wav = await reqBin("session", BASE + "/securimage/securimage_play.php");
             fs.writeFileSync(OUT + "/rec-audio-" + results.length + "-a" + att + ".wav", wav.buf);
             const stt = await speechmaticsSTT(wav.buf, sttKey);
             if (stt.err) { console.log("REC_STT_ERR " + JSON.stringify({ label, type: spec.type, att, err: stt.err })); continue; }
-            const cands = spokenToCharsVariants(stt.text);
-            code = cands.find((c) => c.length === 6) || "";
-            console.log("REC_CAPTCHA " + JSON.stringify({ label, type: spec.type, att, tx: String(stt.text).slice(0, 90), code, n: cands.length }));
-          } catch (e) { console.log("REC_CAPTCHA_ERR " + JSON.stringify({ label, att, err: e.message })); }
+            const variants = spokenToCharsVariants(stt.text);
+            const cands = [];
+            for (const v of variants) { if (v && v.length >= 3 && v.length <= 6) cands.push(v); }
+            for (const v of [...cands]) { if (/O/.test(v)) cands.push(v.replace(/O/g, "0")); if (/0/.test(v)) cands.push(v.replace(/0/g, "O")); }
+            uniq = [...new Set(cands)].sort((a, b) => Math.abs(a.length - 4) - Math.abs(b.length - 4)).slice(0, 6);
+            console.log("REC_CAPTCHA " + JSON.stringify({ label, type: spec.type, att, tx: String(stt.text).slice(0, 90), variants: uniq }));
+          } catch (e) { console.log("REC_CAPTCHA_ERR " + JSON.stringify({ label, att, err: e.message })); continue; }
+          for (const cand of uniq) {
+            const p2 = new URLSearchParams(params);
+            p2.set("captcha_code", cand);
+            await sleep(2300);
+            try {
+              const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/subdomain/edit.php" }, body: p2.toString() });
+              const text = stripHtml(post.body);
+              const err = /Problems!|Oops!|must enable cookies/i.test(text);
+              console.log("RECORD_POST " + JSON.stringify({ label, type: spec.type, cand, status: post.status, url: post.url, flag: err ? "ERR" : "OK?" }));
+              fs.writeFileSync(OUT + "/rec-resp-" + results.length + "-" + cand + "-a" + att + ".html", post.body);
+              fs.appendFileSync(OUT + "/records.log", JSON.stringify({ label, type: spec.type, address: spec.address, cand, status: post.status, flag: err ? "ERR" : "OK?", text: text.slice(0, 1400) }) + "\n");
+              if (!err) { results.push({ host: label, type: spec.type, address: spec.address, status: post.status, cand, flag: "OK?" }); done = true; break; }
+            } catch (e) { console.log("RECORD_ERR " + JSON.stringify({ label, cand, error: e.message })); }
+          }
         }
-      }
-      if (!/^[A-Za-z0-9]{6}$/.test(code)) {
-        console.log("REC_SKIP " + JSON.stringify({ label, type: spec.type, reason: "no-code" }));
-        results.push({ host: label, type: spec.type, error: "captcha-unreadable" });
-        await sleep(800);
+        if (!done) { console.log("REC_SKIP " + JSON.stringify({ label, type: spec.type, reason: "captcha-unreadable" })); results.push({ host: label, type: spec.type, error: "captcha-unreadable" }); }
         continue;
       }
-      params.set("captcha_code", code);
-      params.set("ttlalias", "");
-      await sleep(2200);
-      try {
-        const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/subdomain/edit.php" }, body: params.toString() });
-        const text = stripHtml(post.body);
-        const err = /Problems!|Oops!|must enable cookies/i.test(text);
-        const flag = err ? "ERR" : "OK?";
-        fs.writeFileSync(OUT + "/rec-resp-" + results.length + ".html", post.body);
-        console.log("RECORD_POST " + JSON.stringify({ label, type: spec.type, address: spec.address, status: post.status, url: post.url, flag }));
-        console.log("RECORD_TEXT " + text.slice(0, 500).replace(/\n/g, " | "));
-        fs.appendFileSync(OUT + "/records.log", JSON.stringify({ label, type: spec.type, address: spec.address, status: post.status, url: post.url, flag, text: text.slice(0, 1400) }) + "\n");
-        results.push({ host: label, type: spec.type, address: spec.address, status: post.status, flag });
-      } catch (e) {
-        console.log("RECORD_ERR " + JSON.stringify({ label, type: spec.type, error: e.message }));
-        results.push({ host: label, type: spec.type, error: e.message });
-      }
+      console.log("REC_SKIP " + JSON.stringify({ label, type: spec.type, reason: "no-stt-key" }));
+      results.push({ host: label, type: spec.type, error: "no-stt-key" });
+      continue;
     }
   }
   fs.writeFileSync(OUT + "/records-results.json", JSON.stringify(results, null, 2));
@@ -638,7 +640,11 @@ function spokenToCharsVariants(text) {
   const a = up(strict), b = up(split);
   const out = [a];
   if (b !== a) out.push(b);
-  return out;
+  for (const seq of [strict, split]) {
+    for (let i = 1; i < seq.length; i++) { const s = up(seq.slice(i)); if (s.length >= 3 && s.length <= 6) out.push(s); }
+    for (let j = seq.length - 1; j >= 1; j--) { const s = up(seq.slice(0, j)); if (s.length >= 3 && s.length <= 6) out.push(s); }
+  }
+  return [...new Set(out)];
 }
 
 async function speechmaticsSTT(wavBuf, key) {
