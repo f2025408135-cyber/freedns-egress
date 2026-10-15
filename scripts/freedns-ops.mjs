@@ -205,6 +205,12 @@ async function loginAndHosts({ username, password }) {
   const p = PAYLOAD;
   const email = p.email || username;
   const candidates = [...new Set([email, username])];
+  const warm = await req("session", BASE + "/signup/");
+  console.log("LOGIN_WARMUP " + JSON.stringify({ status: warm.status, jar: Object.fromEntries(jar("session")) }));
+  if (!jar("session").size) {
+    const warm2 = await req("session", BASE + "/");
+    console.log("LOGIN_WARMUP2 " + JSON.stringify({ status: warm2.status, jar: Object.fromEntries(jar("session")) }));
+  }
   let ok = false;
   let checkBody = null;
   for (const uval of candidates) {
