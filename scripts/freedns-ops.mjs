@@ -196,42 +196,50 @@ async function pollEmailForLink(email, minutes) {
 }
 
 async function loginAndHosts({ username, password }) {
-  const lp = await req("session", BASE + "/zc.php?step=2");
-  const forms = dumpForms(lp.body);
-  const lf = forms.find((x) => x.fields.some((y) => /pass/i.test(y.name))) || forms[0];
-  const action = new URL((lf && lf.action) || "/zc.php?step=2", BASE + "/zc.php").toString();
-  const params = new URLSearchParams();
-  for (const ff of ((lf && lf.fields) || [])) {
-    if (ff.kind !== "input" || ["submit", "button", "image", "reset"].includes(ff.type)) continue;
-    if (!ff.name) continue;
-    if (ff.type === "checkbox" || ff.type === "radio") { if (ff.checked) params.set(ff.name, ff.value || "on"); continue; }
-    params.set(ff.name, ff.value || "");
+  const p = PAYLOAD;
+  const email = p.email || username;
+  const candidates = [...new Set([email, username])];
+  let ok = false;
+  let checkBody = null;
+  for (const uval of candidates) {
+    const lp = await req("session", BASE + "/zc.php");
+    const forms = dumpForms(lp.body);
+    const lf = forms.find((x) => x.fields.some((y) => /pass/i.test(y.name))) || forms[0];
+    const action = new URL((lf && lf.action) || "/zc.php?step=2", BASE + "/zc.php").toString();
+    const params = new URLSearchParams();
+    for (const ff of ((lf && lf.fields) || [])) {
+      if (ff.kind !== "input" || ["submit", "button", "image", "reset"].includes(ff.type)) continue;
+      if (!ff.name) continue;
+      if (ff.type === "checkbox" || ff.type === "radio") { if (ff.checked) params.set(ff.name, ff.value || "on"); continue; }
+      params.set(ff.name, ff.value || "");
+    }
+    let setU = false, setP = false;
+    for (const ff of ((lf && lf.fields) || [])) {
+      if (ff.kind !== "input") continue;
+      if (/user|email|login/i.test(ff.name) && params.has(ff.name)) { params.set(ff.name, uval); setU = true; }
+      if (/pass/i.test(ff.name) && params.has(ff.name)) { params.set(ff.name, password); setP = true; }
+    }
+    if (!setU) params.set("username", uval);
+    if (!setP) params.set("password", password);
+    if (!params.has("remember")) params.set("remember", "1");
+    const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php" }, body: params.toString() });
+    fs.writeFileSync(OUT + "/login-after.html", post.body);
+    console.log("LOGIN_POST " + JSON.stringify({ uval: uval.replace(/@.*/, "@..."), status: post.status, url: post.url, loc: post.location, len: post.len }));
+    console.log("LOGIN_TEXT " + stripHtml(post.body).slice(0, 400));
+    const check = await req("session", BASE + "/subdomain/");
+    const ct = stripHtml(check.body);
+    ok = !/FreeDNS Login!|You must enable cookies|Oops!/i.test(ct) && /add|subdomain/i.test(ct);
+    console.log("LOGGED_IN_GUESS " + JSON.stringify({ uval: uval.replace(/@.*/, "@..."), ok }));
+    if (ok) { checkBody = check.body; fs.writeFileSync(OUT + "/subdomain.html", check.body); break; }
   }
-  let setU = false, setP = false;
-  for (const ff of ((lf && lf.fields) || [])) {
-    if (ff.kind !== "input") continue;
-    if (/user|email|login/i.test(ff.name) && params.has(ff.name)) { params.set(ff.name, username); setU = true; }
-    if (/pass/i.test(ff.name) && params.has(ff.name)) { params.set(ff.name, password); setP = true; }
-  }
-  if (!setU) params.set("username", username);
-  if (!setP) params.set("password", password);
-  const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php?step=2" }, body: params.toString() });
-  fs.writeFileSync(OUT + "/login-after.html", post.body);
-  console.log("LOGIN_POST " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len }));
-  console.log("LOGIN_TEXT " + stripHtml(post.body).slice(0, 1000));
-
-  const check = await req("session", BASE + "/subdomain/");
-  fs.writeFileSync(OUT + "/subdomain.html", check.body);
-  const ct = stripHtml(check.body);
-  const loggedIn = /add a subdomain|logout|log out|my account|domains you|subdomains/i.test(ct);
-  console.log("LOGGED_IN_GUESS " + loggedIn);
-  const forms2 = dumpForms(check.body);
+  if (!ok || !checkBody) { summary({ phase: "login_hosts", ok: false, reason: "login-failed" }); return; }
+  const forms2 = dumpForms(checkBody);
   console.log("SUBDOMAIN_FORMS " + JSON.stringify(forms2, null, 2));
   const addForm = forms2.find((x) => x.fields.some((y) => /^subdomain$/i.test(y.name)) && x.fields.some((y) => /type/i.test(y.name))) ||
     forms2.find((x) => x.fields.some((y) => /address|destination|dest/i.test(y.name)));
   console.log("ADD_FORM " + (addForm ? JSON.stringify({ action: addForm.action, method: addForm.method, id: addForm.id }) : "NOT_FOUND"));
-  if (!addForm) { summary({ phase: "login_hosts", ok: false, reason: "no-add-form", loggedIn }); return; }
-  await createHosts(addForm, check.body);
+  if (!addForm) { summary({ phase: "login_hosts", ok: false, reason: "no-add-form", loggedIn: true }); return; }
+  await createHosts(addForm, checkBody);
 }
 
 async function createHosts(addForm, listingHtml) {
