@@ -648,6 +648,7 @@ async function audioflow() {
       let aud;
       try { aud = await reqBin(jarName, BASE + "/securimage/securimage_play.php?" + Math.random().toString(36).slice(2), { headers: { "Referer": BASE + "/signup/", "Accept": "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.8" } }); } catch (e) { console.log("AUDIO_ERR " + i + " " + e.message); continue; }
       fs.writeFileSync(OUT + "/audio-s" + (i + 1) + "-r" + r + ".wav", aud.buf);
+      fs.writeFileSync(OUT + "/audio-cookies-s" + (i + 1) + ".json", JSON.stringify(Object.fromEntries(jar(jarName).entries())));
       console.log("AUDIO_FETCH " + JSON.stringify({ s: i + 1, r, status: aud.status, ct: aud.ct, bytes: aud.buf.length, md5: crypto.createHash("md5").update(aud.buf).digest("hex") }));
       if (aud.status !== 200 || aud.buf.length < 1000) { await sleep(1500); continue; }
       const stt = await speechmaticsSTT(aud.buf, key);
