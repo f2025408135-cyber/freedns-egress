@@ -394,56 +394,49 @@ async function captcha() {
   summary({ phase: "captcha", ok: list.every((r) => r.status === 200 && r.bytes > 500), count, list });
 }
 
+async function trySignupCandidate(ci, cand, p) {
+  const jarName = "cand" + ci;
+  if (cand.cookies) { for (const [k, v] of Object.entries(cand.cookies)) jar(jarName).set(k, v); }
+  const names = ["firstname", "lastname", "username", "password", "password2", "email", "captcha_code", "PROCID", "TRANSPRE", "action"];
+  const action = new URL("/signup/?step=2", BASE + "/signup/").toString();
+  const params = new URLSearchParams();
+  for (const n of names) params.set(n, "");
+  const merged = { ...(p.fields || {}), ...(cand.fields || {}) };
+  for (const [k, v] of Object.entries(merged)) { if (params.has(k) || p.allow_extra_fields) params.set(k, String(v)); }
+  for (const [k, v] of Object.entries(p.extra_fields || {})) params.set(k, String(v));
+  const bodyStr = params.toString();
+  console.log("CANDIDATE_POST " + JSON.stringify({ ci, action, fields: redact(bodyStr, p.password).slice(0, 800) }));
+  const post = await req(jarName, action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/signup/" }, body: bodyStr });
+  fs.writeFileSync(OUT + "/signup-after-" + ci + ".html", post.body);
+  const text = stripHtml(post.body);
+  console.log("CANDIDATE_" + ci + "_RESULT " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len }));
+  console.log("CANDIDATE_" + ci + "_TEXT_BEGIN\n" + redact(text.slice(0, 3500), p.password) + "\nCANDIDATE_" + ci + "_TEXT_END");
+  const okGuess = /check your email|activation|welcome|success|created|thank|has been sent/i.test(text) && !/already (taken|in use|registered)|invalid|incorrect|failed|must be|try again/i.test(text);
+  const captchaErr = /captcha|security code|code you (entered|typed)/i.test(text) && /incorrect|invalid|does not match|wrong|try again/i.test(text);
+  return { okGuess, captchaErr, status: post.status, url: post.url };
+}
+
 async function signup() {
   const p = PAYLOAD;
-  if (p.cookies) { for (const [k, v] of Object.entries(p.cookies)) jar("session").set(k, v); }
-  let f = null;
-  if (p.fixed_fields) {
-    const names = ["firstname", "lastname", "username", "password", "password2", "email", "captcha_code", "PROCID", "TRANSPRE", "action"];
-    f = { action: "/signup/?step=2", method: "post", id: "", name: "joinfrm", fields: names.map((n) => ({ kind: "input", name: n, type: "text", value: "" })) };
-    console.log("SIGNUP_FIXED_FIELDS_MODE");
-  } else {
-    const su = await req("session", BASE + "/signup/");
-    fs.writeFileSync(OUT + "/signup-before.html", su.body);
-    console.log("SIGNUP_GET " + JSON.stringify({ status: su.status, len: su.len }));
-    const forms = dumpForms(su.body);
-    console.log("SIGNUP_FORMS " + JSON.stringify(forms, null, 2));
-    f = forms.find((x) => x.fields.some((y) => /pass/i.test(y.name))) || forms[0];
-  }
-  if (!f) { console.log("NO_FORM"); summary({ phase: "signup", ok: false, reason: "no-form" }); process.exitCode = 1; return; }
-  const action = new URL(f.action || "/signup/", BASE + "/signup/").toString();
-  const params = new URLSearchParams();
-  for (const ff of f.fields) {
-    if (ff.kind !== "input" || !ff.name) continue;
-    if (["submit", "button", "image", "reset"].includes(ff.type)) continue;
-    if (ff.type === "checkbox" || ff.type === "radio") { if (ff.checked) params.set(ff.name, ff.value || "on"); continue; }
-    params.set(ff.name, ff.value || "");
-  }
-  for (const [k, v] of Object.entries(p.fields || {})) {
-    if (params.has(k) || p.allow_extra_fields) params.set(k, String(v));
-  }
-  for (const [k, v] of Object.entries(p.extra_fields || {})) params.set(k, String(v));
-  if (p.captcha_math) {
-    const q = findMathQuestion(su.body);
-    const cf = p.captcha_field || findCaptchaFieldName(f);
-    if (q && cf) {
-      console.log("CAPTCHA_MATH " + JSON.stringify({ field: cf, context: q.context, computed: q.a + " " + q.op + " " + q.b + " = " + q.answer }));
-      params.set(cf, String(q.answer));
-    } else {
-      console.log("CAPTCHA_MATH_UNRESOLVED " + JSON.stringify({ q: q || null, field: cf || null }));
+  let won = null;
+  if (Array.isArray(p.candidates) && p.candidates.length) {
+    for (let ci = 0; ci < p.candidates.length; ci++) {
+      const r = await trySignupCandidate(ci, p.candidates[ci], p);
+      console.log("CANDIDATE_VERDICT " + JSON.stringify({ ci, ...r }));
+      if (r.okGuess) { won = ci; break; }
+      if (!r.captchaErr) { summary({ phase: "signup", ok: false, reason: "non-captcha-failure", ci, stat: r.status }); return; }
+      await sleep(2500);
     }
+  } else {
+    const r = await trySignupCandidate(0, { cookies: p.cookies, fields: p.fields }, p);
+    console.log("CANDIDATE_VERDICT " + JSON.stringify({ ci: 0, ...r }));
+    if (r.okGuess) won = 0;
+    else { summary({ phase: "signup", ok: false, reason: r.captchaErr ? "captcha" : "other", stat: r.status }); return; }
   }
-  const bodyStr = params.toString();
-  console.log("SIGNUP_POST " + JSON.stringify({ action, fields: redact(bodyStr, p.password).slice(0, 800) }));
-  const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/signup/" }, body: bodyStr });
-  fs.writeFileSync(OUT + "/signup-after.html", post.body);
-  const text = stripHtml(post.body);
-  console.log("SIGNUP_POST_RESULT " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len }));
-  console.log("SIGNUP_RESULT_TEXT_BEGIN\n" + redact(text.slice(0, 3500), p.password) + "\nSIGNUP_RESULT_TEXT_END");
-  const okGuess = /check your email|activation|verify|welcome|success|created|thank/i.test(text) && !/already (taken|in use|registered)|invalid|error|incorrect|must be|try again/i.test(text);
-  const captchaErr = /captcha|security code/i.test(text) && /incorrect|invalid|does not match|wrong|try again/i.test(text);
-  summary({ phase: "signup", ok: okGuess, postStatus: post.status, postUrl: post.url, captchaErr });
-  if (!p.auto || !okGuess) return;
+  if (won === null) { summary({ phase: "signup", ok: false, reason: "all-candidates-failed", tried: p.candidates.length }); return; }
+  for (const [k, v] of jar("cand" + won).entries()) jar("session").set(k, v);
+  console.log("SIGNUP_WON_CANDIDATE " + won);
+  if (!p.auto) { summary({ phase: "signup", ok: true, won }); return; }
   const link = await pollEmailForLink(p.email, p.poll_minutes || 20);
   if (link) {
     const r = await req("session", link);
