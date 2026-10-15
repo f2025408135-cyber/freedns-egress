@@ -712,33 +712,51 @@ async function audioflow() {
 
 async function logindbg() {
   const p = PAYLOAD;
-  const cases = [
-    { name: "A-securimage", warm: ["/securimage/securimage_show.php", "/zc.php"] },
-    { name: "B-step1", warm: ["/zc.php?step=1"] },
-    { name: "C-step2", warm: ["/zc.php?step=2"] },
-  ];
-  for (const cs of cases) {
-    const jn = "dbg-" + cs.name;
-    for (const w of cs.warm) {
-      const g = await req(jn, BASE + w, { logCookies: true });
-      console.log("DBG_WARM " + JSON.stringify({ case: cs.name, url: w, status: g.status, len: g.len, jar: Object.fromEntries(jar(jn)) }));
-    }
-    const params = new URLSearchParams();
-    params.set("username", p.email || p.username);
-    params.set("password", p.password);
-    params.set("remember", "1");
-    params.set("submit", "Login");
-    params.set("remote", "");
-    params.set("from", "");
-    params.set("action", "auth");
-    const post = await req(jn, BASE + "/zc.php?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php", "Origin": BASE }, body: params.toString(), logCookies: true });
-    const pt = stripHtml(post.body);
-    console.log("DBG_POST " + JSON.stringify({ case: cs.name, status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar(jn)), head: pt.slice(0, 180) }));
-    const sd = await req(jn, BASE + "/subdomain/");
-    const sdt = stripHtml(sd.body);
-    console.log("DBG_SD " + JSON.stringify({ case: cs.name, status: sd.status, len: sd.len, looksLogin: /FreeDNS Login!/i.test(sdt), ok: !/FreeDNS Login!|You must enable cookies|Oops!/i.test(sdt) }));
-    await sleep(1000);
+  const lp = await req("lp", BASE + "/zc.php?step=2", { logCookies: true });
+  fs.writeFileSync(OUT + "/logpage.html", lp.body);
+  console.log("LP " + JSON.stringify({ status: lp.status, url: lp.url, len: lp.len, jar: Object.fromEntries(jar("lp")) }));
+  const forms = [...lp.body.matchAll(/<form[\s\S]*?<\/form>/gi)].map((m) => m[0]);
+  for (let fi = 0; fi < forms.length; fi++) {
+    const f = forms[fi];
+    const action = (f.match(/action\s*=\s*["']?([^"'\s>]+)/i) || [])[1] || "";
+    const method = (f.match(/method\s*=\s*["']?([^"'\s>]+)/i) || [])[1] || "";
+    const id = (f.match(/id\s*=\s*["']?([^"'\s>]+)/i) || [])[1] || "";
+    const inputs = [...f.matchAll(/<input[^>]*>/gi)].map((x) => {
+      const t = x[0];
+      const g = (n) => (t.match(new RegExp(n + "\\s*=\\s*[\"']?([^\"'\\s>]*)", "i")) || [])[1] || "";
+      return { type: g("type"), name: g("name"), value: g("value").slice(0, 40), maxlength: g("maxlength") };
+    });
+    console.log("LP_FORM " + JSON.stringify({ fi, action, method, id, inputs }));
   }
+  const txt = stripHtml(lp.body);
+  console.log("LP_TEXT " + txt.slice(0, 600).replace(/\n/g, " | "));
+  const home = await req("home", BASE + "/", { logCookies: true });
+  fs.writeFileSync(OUT + "/home.html", home.body);
+  const hforms = [...home.body.matchAll(/<form[\s\S]*?<\/form>/gi)].map((m) => m[0]);
+  console.log("HOME " + JSON.stringify({ status: home.status, len: home.len, jar: Object.fromEntries(jar("home")), nforms: hforms.length }));
+  for (let fi = 0; fi < hforms.length; fi++) {
+    const f = hforms[fi];
+    const action = (f.match(/action\s*=\s*["']?([^"'\s>]+)/i) || [])[1] || "";
+    const inputs = [...f.matchAll(/<input[^>]*>/gi)].map((x) => {
+      const t = x[0];
+      const g = (n) => (t.match(new RegExp(n + "\\s*=\\s*[\"']?([^\"'\\s>]*)", "i")) || [])[1] || "";
+      return { type: g("type"), name: g("name"), value: g("value").slice(0, 40) };
+    });
+    console.log("HOME_FORM " + JSON.stringify({ fi, action, inputs }));
+  }
+  const se = await req("pm", BASE + "/securimage/securimage_show.php", { logCookies: true });
+  console.log("PM_WARM " + JSON.stringify({ status: se.status, jar: Object.fromEntries(jar("pm")) }));
+  const params = new URLSearchParams();
+  params.set("username", p.username);
+  params.set("password", p.password);
+  params.set("remember", "1");
+  params.set("submit", "Login");
+  params.set("remote", "");
+  params.set("from", "");
+  params.set("action", "auth");
+  const post = await req("pm", BASE + "/zc.php?step=2", { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php?step=2", "Origin": BASE }, body: params.toString(), logCookies: true });
+  console.log("PM_POST " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar("pm")), head: stripHtml(post.body).slice(0, 200).replace(/\n/g, " | ") }));
+  console.log("PM_CT " + post.ct);
   summary({ phase: "logindbg", ok: true });
 }
 
