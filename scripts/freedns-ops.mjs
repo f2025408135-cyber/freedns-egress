@@ -203,55 +203,33 @@ async function pollEmailForLink(email, minutes) {
 
 async function loginAndHosts({ username, password }) {
   const p = PAYLOAD;
-  const email = p.email || username;
-  const candidates = [...new Set([email, username])];
-  const warm = await req("session", BASE + "/signup/");
-  console.log("LOGIN_WARMUP " + JSON.stringify({ status: warm.status, jar: Object.fromEntries(jar("session")) }));
-  if (!jar("session").size) {
-    const warm2 = await req("session", BASE + "/");
-    console.log("LOGIN_WARMUP2 " + JSON.stringify({ status: warm2.status, jar: Object.fromEntries(jar("session")) }));
-  }
-  let ok = false;
-  let checkBody = null;
-  for (const uval of candidates) {
-    const lp = await req("session", BASE + "/zc.php");
-    const forms = dumpForms(lp.body);
-    const lf = forms.find((x) => x.fields.some((y) => /pass/i.test(y.name))) || forms[0];
-    const action = new URL((lf && lf.action) || "/zc.php?step=2", BASE + "/zc.php").toString();
-    const params = new URLSearchParams();
-    for (const ff of ((lf && lf.fields) || [])) {
-      if (ff.kind !== "input" || ["submit", "button", "image", "reset"].includes(ff.type)) continue;
-      if (!ff.name) continue;
-      if (ff.type === "checkbox" || ff.type === "radio") { if (ff.checked) params.set(ff.name, ff.value || "on"); continue; }
-      params.set(ff.name, ff.value || "");
-    }
-    let setU = false, setP = false;
-    for (const ff of ((lf && lf.fields) || [])) {
-      if (ff.kind !== "input") continue;
-      if (/user|email|login/i.test(ff.name) && params.has(ff.name)) { params.set(ff.name, uval); setU = true; }
-      if (/pass/i.test(ff.name) && params.has(ff.name)) { params.set(ff.name, password); setP = true; }
-    }
-    if (!setU) params.set("username", uval);
-    if (!setP) params.set("password", password);
-    if (!params.has("remember")) params.set("remember", "1");
-    const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php" }, body: params.toString() });
-    fs.writeFileSync(OUT + "/login-after.html", post.body);
-    console.log("LOGIN_POST " + JSON.stringify({ uval: uval.replace(/@.*/, "@..."), status: post.status, url: post.url, loc: post.location, len: post.len }));
-    console.log("LOGIN_TEXT " + stripHtml(post.body).slice(0, 400));
-    const check = await req("session", BASE + "/subdomain/");
-    const ct = stripHtml(check.body);
-    ok = !/FreeDNS Login!|You must enable cookies|Oops!/i.test(ct) && /add|subdomain/i.test(ct);
-    console.log("LOGGED_IN_GUESS " + JSON.stringify({ uval: uval.replace(/@.*/, "@..."), ok }));
-    if (ok) { checkBody = check.body; fs.writeFileSync(OUT + "/subdomain.html", check.body); break; }
-  }
-  if (!ok || !checkBody) { summary({ phase: "login_hosts", ok: false, reason: "login-failed" }); return; }
-  const forms2 = dumpForms(checkBody);
+  const se = await req("session", BASE + "/securimage/securimage_show.php", { logCookies: true });
+  console.log("LOGIN_WARMUP " + JSON.stringify({ status: se.status, jar: Object.fromEntries(jar("session")) }));
+  const params = new URLSearchParams();
+  params.set("username", username);
+  params.set("password", password);
+  params.set("remember", "1");
+  params.set("submit", "Login");
+  params.set("remote", "");
+  params.set("from", "");
+  params.set("action", "auth");
+  const post = await req("session", BASE + "/zc.php?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php?step=2", "Origin": BASE }, body: params.toString(), logCookies: true });
+  fs.writeFileSync(OUT + "/login-after.html", post.body);
+  console.log("LOGIN_POST " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar("session")) }));
+  console.log("LOGIN_TEXT " + stripHtml(post.body).slice(0, 300).replace(/\n/g, " | "));
+  const check = await req("session", BASE + "/subdomain/", { logCookies: true });
+  fs.writeFileSync(OUT + "/subdomain.html", check.body);
+  const ct = stripHtml(check.body);
+  const ok = !/FreeDNS Login!|You must enable cookies|Problems!|Oops!/i.test(ct);
+  console.log("LOGGED_IN " + JSON.stringify({ ok, status: check.status, len: check.len, jar: Object.fromEntries(jar("session")) }));
+  if (!ok) { summary({ phase: "login_hosts", ok: false, reason: "login-failed" }); return; }
+  const forms2 = dumpForms(check.body);
   console.log("SUBDOMAIN_FORMS " + JSON.stringify(forms2, null, 2));
   const addForm = forms2.find((x) => x.fields.some((y) => /^subdomain$/i.test(y.name)) && x.fields.some((y) => /type/i.test(y.name))) ||
     forms2.find((x) => x.fields.some((y) => /address|destination|dest/i.test(y.name)));
   console.log("ADD_FORM " + (addForm ? JSON.stringify({ action: addForm.action, method: addForm.method, id: addForm.id }) : "NOT_FOUND"));
   if (!addForm) { summary({ phase: "login_hosts", ok: false, reason: "no-add-form", loggedIn: true }); return; }
-  await createHosts(addForm, checkBody);
+  await createHosts(addForm, check.body);
 }
 
 async function createHosts(addForm, listingHtml) {
