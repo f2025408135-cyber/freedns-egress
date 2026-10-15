@@ -247,9 +247,9 @@ async function createHosts(addForm, listingHtml) {
   const action = new URL(addForm.action || "/subdomain/", BASE + (addForm.action && addForm.action.startsWith("/") ? "" : "/subdomain/")).toString();
   const forwardTo = p.forward_to || "anonysusarchiver@gmail.com";
   const uname = p.username || "user";
-  const recordSpecs = [
-    { type: "MX", address: "0 mx1.forwardemail.net" },
-    { type: "MX", address: "0 mx2.forwardemail.net" },
+  const recordSpecs = (Array.isArray(p.specs) && p.specs.length) ? p.specs : [
+    { type: "MX", address: "10:mx1.forwardemail.net" },
+    { type: "MX", address: "10:mx2.forwardemail.net" },
     { type: "TXT", address: '"forward-email=' + forwardTo + '"' },
     { type: "TXT", address: '"v=spf1 a include:spf.forwardemail.net -all"' },
   ];

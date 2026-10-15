@@ -22,7 +22,7 @@ jobs:
       - name: run phase
         env:
           PHASE: ${{ inputs.phase }}
-          PAYLOAD_B64: ${{ secrets.PAYLOAD_B64 || inputs.payload_b64 }}
+          PAYLOAD_B64: ${{ inputs.payload_b64 || secrets.PAYLOAD_B64 }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           SPEECHMATICS_KEY: ${{ secrets.SPEECHMATICS_KEY }}
         run: node scripts/freedns-ops.mjs
