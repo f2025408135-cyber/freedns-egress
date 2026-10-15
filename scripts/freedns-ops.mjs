@@ -397,12 +397,19 @@ async function captcha() {
 async function signup() {
   const p = PAYLOAD;
   if (p.cookies) { for (const [k, v] of Object.entries(p.cookies)) jar("session").set(k, v); }
-  const su = await req("session", BASE + "/signup/");
-  const forms = dumpForms(su.body);
-  fs.writeFileSync(OUT + "/signup-before.html", su.body);
-  console.log("SIGNUP_GET " + JSON.stringify({ status: su.status, len: su.len }));
-  console.log("SIGNUP_FORMS " + JSON.stringify(forms, null, 2));
-  const f = forms.find((x) => x.fields.some((y) => /pass/i.test(y.name))) || forms[0];
+  let f = null;
+  if (p.fixed_fields) {
+    const names = ["firstname", "lastname", "username", "password", "password2", "email", "captcha_code", "PROCID", "TRANSPRE", "action"];
+    f = { action: "/signup/?step=2", method: "post", id: "", name: "joinfrm", fields: names.map((n) => ({ kind: "input", name: n, type: "text", value: "" })) };
+    console.log("SIGNUP_FIXED_FIELDS_MODE");
+  } else {
+    const su = await req("session", BASE + "/signup/");
+    fs.writeFileSync(OUT + "/signup-before.html", su.body);
+    console.log("SIGNUP_GET " + JSON.stringify({ status: su.status, len: su.len }));
+    const forms = dumpForms(su.body);
+    console.log("SIGNUP_FORMS " + JSON.stringify(forms, null, 2));
+    f = forms.find((x) => x.fields.some((y) => /pass/i.test(y.name))) || forms[0];
+  }
   if (!f) { console.log("NO_FORM"); summary({ phase: "signup", ok: false, reason: "no-form" }); process.exitCode = 1; return; }
   const action = new URL(f.action || "/signup/", BASE + "/signup/").toString();
   const params = new URLSearchParams();
@@ -434,8 +441,9 @@ async function signup() {
   console.log("SIGNUP_POST_RESULT " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len }));
   console.log("SIGNUP_RESULT_TEXT_BEGIN\n" + redact(text.slice(0, 3500), p.password) + "\nSIGNUP_RESULT_TEXT_END");
   const okGuess = /check your email|activation|verify|welcome|success|created|thank/i.test(text) && !/already (taken|in use|registered)|invalid|error|incorrect|must be|try again/i.test(text);
-  summary({ phase: "signup", ok: okGuess, postStatus: post.status, postUrl: post.url });
-  if (!p.auto) return;
+  const captchaErr = /captcha|security code/i.test(text) && /incorrect|invalid|does not match|wrong|try again/i.test(text);
+  summary({ phase: "signup", ok: okGuess, postStatus: post.status, postUrl: post.url, captchaErr });
+  if (!p.auto || !okGuess) return;
   const link = await pollEmailForLink(p.email, p.poll_minutes || 20);
   if (link) {
     const r = await req("session", link);
