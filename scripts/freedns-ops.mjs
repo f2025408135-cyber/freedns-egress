@@ -213,10 +213,17 @@ async function loginAndHosts({ username, password }) {
   params.set("remote", "");
   params.set("from", "");
   params.set("action", "auth");
-  const post = await req("session", BASE + "/zc.php?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php?step=2", "Origin": BASE }, body: params.toString(), logCookies: true });
+  const post = await req("session", BASE + "/zc.php?step=2", { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php?step=2", "Origin": BASE }, body: params.toString(), logCookies: true });
   fs.writeFileSync(OUT + "/login-after.html", post.body);
   console.log("LOGIN_POST " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar("session")) }));
-  console.log("LOGIN_TEXT " + stripHtml(post.body).slice(0, 300).replace(/\n/g, " | "));
+  const loc = post.location ? new URL(post.location, BASE).toString() : "";
+  const gotAuth = jar("session").has("dns_cookie");
+  console.log("LOGIN_AUTH " + JSON.stringify({ gotAuth, loc }));
+  if (loc) {
+    const menu = await req("session", loc, { logCookies: true });
+    fs.writeFileSync(OUT + "/menu.html", menu.body);
+    console.log("MENU " + JSON.stringify({ status: menu.status, url: menu.url, len: menu.len }));
+  }
   const check = await req("session", BASE + "/subdomain/", { logCookies: true });
   fs.writeFileSync(OUT + "/subdomain.html", check.body);
   const ct = stripHtml(check.body);
