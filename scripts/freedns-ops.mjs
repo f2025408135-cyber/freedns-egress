@@ -374,16 +374,24 @@ async function probe() {
 }
 
 async function captcha() {
-  const su = await req("session", BASE + "/signup/");
-  fs.writeFileSync(OUT + "/signup.html", su.body);
-  console.log("SIGNUP_GET " + JSON.stringify({ status: su.status, len: su.len }));
-  const img = await reqBin("session", BASE + "/securimage/securimage_show.php");
-  fs.writeFileSync(OUT + "/captcha.png", img.buf);
-  const cookies = Object.fromEntries(jar("session").entries());
-  fs.writeFileSync(OUT + "/cookies.json", JSON.stringify(cookies, null, 2));
-  console.log("CAPTCHA_IMG " + JSON.stringify({ status: img.status, url: img.url, ct: img.ct, bytes: img.buf.length, md5: crypto.createHash("md5").update(img.buf).digest("hex") }));
-  console.log("COOKIES " + JSON.stringify(Object.keys(cookies)));
-  summary({ phase: "captcha", ok: img.status === 200 && img.buf.length > 500, bytes: img.buf.length });
+  const count = Math.max(1, Math.min(12, PAYLOAD.count || 1));
+  const list = [];
+  for (let i = 1; i <= count; i++) {
+    const jarName = "cap" + i;
+    const su = await req(jarName, BASE + "/signup/");
+    if (i === 1) fs.writeFileSync(OUT + "/signup.html", su.body);
+    const img = await reqBin(jarName, BASE + "/securimage/securimage_show.php");
+    fs.writeFileSync(OUT + "/captcha-" + i + ".png", img.buf);
+    if (i === 1) fs.writeFileSync(OUT + "/captcha.png", img.buf);
+    const cookies = Object.fromEntries(jar(jarName).entries());
+    fs.writeFileSync(OUT + "/cookies-" + i + ".json", JSON.stringify(cookies, null, 2));
+    if (i === 1) fs.writeFileSync(OUT + "/cookies.json", JSON.stringify(cookies, null, 2));
+    const rec = { i, status: img.status, ct: img.ct, bytes: img.buf.length, md5: crypto.createHash("md5").update(img.buf).digest("hex"), cookieNames: Object.keys(cookies) };
+    console.log("CAPTCHA_IMG " + JSON.stringify(rec));
+    list.push(rec);
+    if (i < count) await sleep(1200);
+  }
+  summary({ phase: "captcha", ok: list.every((r) => r.status === 200 && r.bytes > 500), count, list });
 }
 
 async function signup() {
