@@ -285,19 +285,20 @@ async function createHosts(addForm, listingHtml) {
       const label = (d.host || "mail") + "." + d.name;
       let code = "";
       if (sttKey) {
-        try {
-          const wav = await reqBin("session", BASE + "/securimage/securimage_play.php");
-          fs.writeFileSync(OUT + "/rec-audio-" + results.length + ".wav", wav.buf);
-          const stt = await speechmaticsSTT(wav.buf, sttKey);
-          if (stt.err) { console.log("REC_STT_ERR " + JSON.stringify({ label, type: spec.type, err: stt.err })); }
-          else {
+        for (let att = 1; att <= 3 && !/^[A-Za-z0-9]{6}$/.test(code); att++) {
+          try {
+            await reqBin("session", BASE + "/securimage/securimage_show.php?" + Math.random());
+            const wav = await reqBin("session", BASE + "/securimage/securimage_play.php");
+            fs.writeFileSync(OUT + "/rec-audio-" + results.length + "-a" + att + ".wav", wav.buf);
+            const stt = await speechmaticsSTT(wav.buf, sttKey);
+            if (stt.err) { console.log("REC_STT_ERR " + JSON.stringify({ label, type: spec.type, att, err: stt.err })); continue; }
             const cands = spokenToCharsVariants(stt.text);
-            code = cands.find((c) => c.length === 6) || cands[0] || "";
-            console.log("REC_CAPTCHA " + JSON.stringify({ label, type: spec.type, tx: String(stt.text).slice(0, 90), code, n: cands.length }));
-          }
-        } catch (e) { console.log("REC_CAPTCHA_ERR " + JSON.stringify({ label, err: e.message })); }
+            code = cands.find((c) => c.length === 6) || "";
+            console.log("REC_CAPTCHA " + JSON.stringify({ label, type: spec.type, att, tx: String(stt.text).slice(0, 90), code, n: cands.length }));
+          } catch (e) { console.log("REC_CAPTCHA_ERR " + JSON.stringify({ label, att, err: e.message })); }
+        }
       }
-      if (!/^[A-Za-z0-9]{4,6}$/.test(code)) {
+      if (!/^[A-Za-z0-9]{6}$/.test(code)) {
         console.log("REC_SKIP " + JSON.stringify({ label, type: spec.type, reason: "no-code" }));
         results.push({ host: label, type: spec.type, error: "captcha-unreadable" });
         await sleep(800);
