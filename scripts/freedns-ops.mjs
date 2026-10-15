@@ -571,12 +571,30 @@ async function flowPhase() {
   await loginAndHosts({ username: p.username, password: p.password });
 }
 
+async function audioprobe() {
+  const jarName = "aud";
+  const su = await req(jarName, BASE + "/signup/");
+  console.log("AUDIO_SIGNUP_GET " + JSON.stringify({ status: su.status, len: su.len }));
+  const cands = ["/securimage/securimage_play.php", "/securimage/securimage_audio_show.php", "/securimage/securimage_show.php?audio=1", "/securimage/securimage_play.php?audio=1"];
+  for (const u of cands) {
+    try {
+      const r = await reqBin(jarName, BASE + u);
+      const head = r.buf.slice(0, 12).toString("hex");
+      console.log("AUDIO_TRY " + JSON.stringify({ u, status: r.status, ct: r.ct, bytes: r.buf.length, head }));
+      if (r.status === 200 && r.buf.length > 800) fs.writeFileSync(OUT + "/audio-" + u.split("/").pop().replace(/[?=]/g, "_") + ".bin", r.buf);
+    } catch (e) { console.log("AUDIO_TRY_ERR " + JSON.stringify({ u, err: e.message })); }
+    await sleep(900);
+  }
+  summary({ phase: "audioprobe", ok: true });
+}
+
 async function main() {
   console.log("PHASE=" + PHASE + " PAYLOAD_KEYS=" + JSON.stringify(Object.keys(PAYLOAD)));
   if (PHASE === "probe") await probe();
   else if (PHASE === "captcha") await captcha();
   else if (PHASE === "signup") await signup();
   else if (PHASE === "flow") await flowPhase();
+  else if (PHASE === "audioprobe") await audioprobe();
   else if (PHASE === "activate") await activate();
   else if (PHASE === "resume") await resume();
   else if (PHASE === "login_hosts") await loginAndHosts({ username: PAYLOAD.username, password: PAYLOAD.password });
