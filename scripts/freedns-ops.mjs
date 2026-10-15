@@ -39,6 +39,12 @@ async function req(sess, url, opts = {}) {
     signal: AbortSignal.timeout(opts.timeout || 45000),
   });
   storeCookies(sess, res);
+  if (opts.logCookies) {
+    let sc = [];
+    try { sc = res.headers.getSetCookie ? res.headers.getSetCookie() : []; } catch {}
+    if (!sc.length) { const raw = res.headers.get("set-cookie"); if (raw) sc = [raw]; }
+    console.log("SETCOOKIE " + JSON.stringify({ url: res.url, sc: sc.map((x) => x.split(";")[0]) }));
+  }
   const body = await res.text();
   return { status: res.status, url: res.url, server: res.headers.get("server") || "", ct: (res.headers.get("content-type") || "").split(";")[0], len: body.length, location: res.headers.get("location") || "", body };
 }
@@ -698,6 +704,35 @@ async function audioflow() {
   await loginAndHosts({ username: p.username, password: p.password });
 }
 
+async function logindbg() {
+  const p = PAYLOAD;
+  const g = await req("dbg", BASE + "/zc.php", { logCookies: true });
+  console.log("DBG_G " + JSON.stringify({ status: g.status, url: g.url, len: g.len, jar: Object.fromEntries(jar("dbg")) }));
+  const params = new URLSearchParams();
+  params.set("username", p.email || p.username);
+  params.set("password", p.password);
+  params.set("remember", "1");
+  params.set("submit", "Login");
+  params.set("remote", "");
+  params.set("from", "");
+  params.set("action", "auth");
+  const post = await req("dbg", BASE + "/zc.php?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php", "Origin": BASE }, body: params.toString(), logCookies: true });
+  console.log("DBG_POST " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar("dbg")) }));
+  console.log("DBG_POST_TEXT " + stripHtml(post.body).slice(0, 500));
+  try {
+    const js = await req("dbg", BASE + "/include/script1.js");
+    fs.writeFileSync(OUT + "/script1.js", js.body);
+    console.log("DBG_JS " + JSON.stringify({ status: js.status, len: js.len, head: js.body.slice(0, 160) }));
+  } catch (e) { console.log("DBG_JS_ERR " + e.message); }
+  const nc = await req("dbg", BASE + "/nocookie/");
+  fs.writeFileSync(OUT + "/nocookie.html", nc.body);
+  console.log("DBG_NOCOOKIE " + JSON.stringify({ status: nc.status, len: nc.len, text: stripHtml(nc.body).slice(0, 400) }));
+  const sd = await req("dbg", BASE + "/subdomain/");
+  const sdt = stripHtml(sd.body);
+  console.log("DBG_SD " + JSON.stringify({ status: sd.status, len: sd.len, looksLogin: /FreeDNS Login!/i.test(sdt), head: sdt.slice(0, 200) }));
+  summary({ phase: "logindbg", ok: true });
+}
+
 async function main() {
   console.log("PHASE=" + PHASE + " PAYLOAD_KEYS=" + JSON.stringify(Object.keys(PAYLOAD)));
   if (PHASE === "probe") await probe();
@@ -706,6 +741,7 @@ async function main() {
   else if (PHASE === "flow") await flowPhase();
   else if (PHASE === "audioprobe") await audioprobe();
   else if (PHASE === "audioflow") await audioflow();
+  else if (PHASE === "logindbg") await logindbg();
   else if (PHASE === "activate") await activate();
   else if (PHASE === "resume") await resume();
   else if (PHASE === "login_hosts") await loginAndHosts({ username: PAYLOAD.username, password: PAYLOAD.password });
