@@ -253,6 +253,7 @@ async function createHosts(addForm, listingHtml) {
     { type: "TXT", address: "v=spf1 a include:spf.forwardemail.net -all" },
   ];
   const results = [];
+  const sttKey = p.speechmatics_key || process.env.SPEECHMATICS_KEY;
   for (const d of p.domains || []) {
     const opt = (p.blind_domain_id && null) || findOption(listingHtml, d.name);
     const domainId = (opt && opt.value) || d.id || null;
@@ -281,16 +282,39 @@ async function createHosts(addForm, listingHtml) {
         else if (/^domain$/.test(n)) params.set(ff.name, domainId);
         else if (/address|destination|dest|content|^value$|target/.test(n)) params.set(ff.name, spec.address);
       }
-      await sleep(2200);
       const label = (d.host || "mail") + "." + d.name;
+      let code = "";
+      if (sttKey) {
+        try {
+          const wav = await reqBin("session", BASE + "/securimage/securimage_play.php");
+          fs.writeFileSync(OUT + "/rec-audio-" + results.length + ".wav", wav.buf);
+          const stt = await speechmaticsSTT(wav.buf, sttKey);
+          if (stt.err) { console.log("REC_STT_ERR " + JSON.stringify({ label, type: spec.type, err: stt.err })); }
+          else {
+            const cands = spokenToCharsVariants(stt.text);
+            code = cands.find((c) => c.length === 6) || cands[0] || "";
+            console.log("REC_CAPTCHA " + JSON.stringify({ label, type: spec.type, tx: String(stt.text).slice(0, 90), code, n: cands.length }));
+          }
+        } catch (e) { console.log("REC_CAPTCHA_ERR " + JSON.stringify({ label, err: e.message })); }
+      }
+      if (!/^[A-Za-z0-9]{4,6}$/.test(code)) {
+        console.log("REC_SKIP " + JSON.stringify({ label, type: spec.type, reason: "no-code" }));
+        results.push({ host: label, type: spec.type, error: "captcha-unreadable" });
+        await sleep(800);
+        continue;
+      }
+      params.set("captcha_code", code);
+      params.set("ttlalias", "");
+      await sleep(2200);
       try {
-        const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/subdomain/" }, body: params.toString() });
+        const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/subdomain/edit.php" }, body: params.toString() });
         const text = stripHtml(post.body);
-        const bad = /you have reached|maximum|limit|error|already (taken|exists|in use|registered)|invalid|denied|not allowed|banned|abuse/i.test(text);
-        const flag = bad ? "ERR" : "OK?";
+        const err = /Problems!|Oops!|must enable cookies/i.test(text);
+        const flag = err ? "ERR" : "OK?";
+        fs.writeFileSync(OUT + "/rec-resp-" + results.length + ".html", post.body);
         console.log("RECORD_POST " + JSON.stringify({ label, type: spec.type, address: spec.address, status: post.status, url: post.url, flag }));
-        console.log("RECORD_TEXT " + text.slice(0, 400));
-        fs.appendFileSync(OUT + "/records.log", JSON.stringify({ label, type: spec.type, address: spec.address, status: post.status, url: post.url, flag, text: text.slice(0, 700) }) + "\n");
+        console.log("RECORD_TEXT " + text.slice(0, 500).replace(/\n/g, " | "));
+        fs.appendFileSync(OUT + "/records.log", JSON.stringify({ label, type: spec.type, address: spec.address, status: post.status, url: post.url, flag, text: text.slice(0, 1400) }) + "\n");
         results.push({ host: label, type: spec.type, address: spec.address, status: post.status, flag });
       } catch (e) {
         console.log("RECORD_ERR " + JSON.stringify({ label, type: spec.type, error: e.message }));
