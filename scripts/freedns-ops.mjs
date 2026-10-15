@@ -246,15 +246,17 @@ async function createHosts(addForm, listingHtml) {
   const p = PAYLOAD;
   const action = new URL(addForm.action || "/subdomain/", BASE + (addForm.action && addForm.action.startsWith("/") ? "" : "/subdomain/")).toString();
   const forwardTo = p.forward_to || "anonysusarchiver@gmail.com";
+  const uname = p.username || "user";
   const recordSpecs = [
     { type: "MX", address: "0 mx1.forwardemail.net" },
     { type: "MX", address: "0 mx2.forwardemail.net" },
-    { type: "TXT", address: "forward-email=" + forwardTo },
-    { type: "TXT", address: "v=spf1 a include:spf.forwardemail.net -all" },
+    { type: "TXT", address: '"forward-email=' + forwardTo + '"' },
+    { type: "TXT", address: '"v=spf1 a include:spf.forwardemail.net -all"' },
   ];
   const results = [];
   const sttKey = p.speechmatics_key || process.env.SPEECHMATICS_KEY;
   for (const d of p.domains || []) {
+    const sub = (d.host || "mx") + "." + uname;
     const opt = (p.blind_domain_id && null) || findOption(listingHtml, d.name);
     const domainId = (opt && opt.value) || d.id || null;
     console.log("DOMAIN_OPT " + JSON.stringify({ name: d.name, found: opt, used: domainId }));
@@ -277,12 +279,12 @@ async function createHosts(addForm, listingHtml) {
         if (!ff.name) continue;
         const n = ff.name.toLowerCase();
         if (/^(type|recordtype|record_type)$/.test(n) || n === "type") params.set(ff.name, spec.type);
-        else if (/subdomain|^host$|^name$/.test(n)) params.set(ff.name, d.host || "mail");
+        else if (/subdomain|^host$|^name$/.test(n)) params.set(ff.name, sub);
         else if (/domain/.test(n) && !/^domain$/.test(n)) params.set(ff.name, domainId);
         else if (/^domain$/.test(n)) params.set(ff.name, domainId);
         else if (/address|destination|dest|content|^value$|target/.test(n)) params.set(ff.name, spec.address);
       }
-      const label = (d.host || "mail") + "." + d.name;
+      const label = sub + "." + d.name;
       params.set("ttlalias", "");
       let done = false;
       if (sttKey) {
@@ -334,10 +336,10 @@ async function createHosts(addForm, listingHtml) {
   fs.writeFileSync(OUT + "/subdomain-after.html", after.body);
   const at = stripHtml(after.body);
   for (const d of p.domains || []) {
-    const label = (d.host || "mail") + "." + d.name;
+    const label = (d.host || "mx") + "." + uname + "." + d.name;
     console.log("LISTING_HAS " + label + " = " + new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(at));
   }
-  if (p.verify_after) await dohVerify((p.domains || []).map((d) => (d.host || "mail") + "." + d.name));
+  if (p.verify_after) await dohVerify((p.domains || []).map((d) => (d.host || "mx") + "." + uname + "." + d.name));
   summary({ phase: "hosts", ok: results.some((r) => r.flag === "OK?"), results });
 }
 
