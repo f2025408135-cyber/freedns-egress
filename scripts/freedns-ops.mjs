@@ -501,6 +501,17 @@ async function flowPostCode(jarName, code, p) {
   return { okGuess, captchaErr, status: post.status, url: post.url, text: redact(text.slice(0, 900), p.password) };
 }
 
+async function readerRead(b64, p) {
+  try {
+    const body = JSON.stringify({ model: p.reader_model || "GLM-5v-Turbo", messages: [{ role: "user", content: [{ type: "text", text: "This image is a CAPTCHA containing exactly 6 characters (letters and/or digits). Transcribe the 6 characters exactly as shown. Output only the 6 characters." }, { type: "image_url", image_url: { url: "data:image/png;base64," + b64 } }] }] });
+    const r = await fetch(p.reader_url, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(90000) });
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch {}
+    if (!j || !j.choices) return { status: r.status, err: t.slice(0, 160) };
+    return { status: r.status, text: String((j.choices[0].message && j.choices[0].message.content) || "").trim() };
+  } catch (e) { return { status: 0, err: String(e.message || e) }; }
+}
+
 async function flowPhase() {
   const p = PAYLOAD;
   const K = Math.max(1, Math.min(6, p.sessions || 3));
@@ -520,10 +531,22 @@ async function flowPhase() {
       try { img = await reqBin(jarName, BASE + "/securimage/securimage_show.php?" + Math.random().toString(36).slice(2)); } catch (e) { console.log("FLOW_IMG_ERR " + i + " " + e.message); continue; }
       fs.writeFileSync(OUT + "/flow-cap-s" + (i + 1) + "-r" + r + ".png", img.buf);
       const md5 = crypto.createHash("md5").update(img.buf).digest("hex");
-      let read = await geminiReadImage(img.buf.toString("base64"));
-      for (let a = 0; a < 2 && (!read || read.status !== 200); a++) { await sleep(8000); read = await geminiReadImage(img.buf.toString("base64")); }
-      const code = read && read.text ? read.text.replace(/[^A-Za-z0-9]/g, "") : "";
-      console.log("FLOW_READ " + JSON.stringify({ s: i + 1, r, md5, gStatus: read && read.status, raw: (read && (read.text || read.err)) || null, code }));
+      const b64 = img.buf.toString("base64");
+      const src = p.reader_url ? "tunnel" : "gemini";
+      let read = null;
+      for (let a = 0; a < 3; a++) {
+        read = p.reader_url ? await readerRead(b64, p) : await geminiReadImage(b64);
+        if (read && read.status === 200 && read.text) break;
+        await sleep(6000);
+      }
+      let code = read && read.text ? read.text.replace(/[^A-Za-z0-9]/g, "") : "";
+      if (code && code.length !== 6) {
+        const read2 = p.reader_url ? await readerRead(b64, p) : await geminiReadImage(b64);
+        const code2 = read2 && read2.text ? read2.text.replace(/[^A-Za-z0-9]/g, "") : "";
+        console.log("FLOW_READ_RETRY " + JSON.stringify({ s: i + 1, r, first: code, second: code2 }));
+        if (code2.length === 6) code = code2;
+      }
+      console.log("FLOW_READ " + JSON.stringify({ s: i + 1, r, md5, src, gStatus: read && read.status, raw: (read && (read.text || read.err)) || null, code }));
       if (code.length < 3 || code.length > 8) { await sleep(1200); continue; }
       const v = await flowPostCode(jarName, code, p);
       console.log("FLOW_VERDICT " + JSON.stringify({ s: i + 1, r, code, okGuess: v.okGuess, captchaErr: v.captchaErr, status: v.status, url: v.url }));
