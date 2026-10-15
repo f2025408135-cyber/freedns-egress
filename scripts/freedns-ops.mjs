@@ -309,11 +309,14 @@ async function createHosts(addForm, listingHtml) {
             try {
               const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/subdomain/edit.php" }, body: p2.toString() });
               const text = stripHtml(post.body);
-              const err = /Problems!|Oops!|must enable cookies/i.test(text);
-              console.log("RECORD_POST " + JSON.stringify({ label, type: spec.type, cand, status: post.status, url: post.url, flag: err ? "ERR" : "OK?" }));
+              const secErr = /security code was incorrect/i.test(text);
+              const anyErr = /Problems!|Oops!|must enable cookies/i.test(text);
+              const errLine = (text.match(/\d+ errors? [^\n]{0,160}/i) || [""])[0];
+              console.log("RECORD_POST " + JSON.stringify({ label, type: spec.type, cand, status: post.status, url: post.url, secErr, flag: anyErr ? (secErr ? "CAPTCHA_ERR" : "FORM_ERR") : "OK?" }));
               fs.writeFileSync(OUT + "/rec-resp-" + results.length + "-" + cand + "-a" + att + ".html", post.body);
-              fs.appendFileSync(OUT + "/records.log", JSON.stringify({ label, type: spec.type, address: spec.address, cand, status: post.status, flag: err ? "ERR" : "OK?", text: text.slice(0, 1400) }) + "\n");
-              if (!err) { results.push({ host: label, type: spec.type, address: spec.address, status: post.status, cand, flag: "OK?" }); done = true; break; }
+              fs.appendFileSync(OUT + "/records.log", JSON.stringify({ label, type: spec.type, address: spec.address, cand, status: post.status, flag: anyErr ? (secErr ? "CAPTCHA_ERR" : "FORM_ERR") : "OK?", text: text.slice(0, 1400) }) + "\n");
+              if (!anyErr) { results.push({ host: label, type: spec.type, address: spec.address, status: post.status, cand, flag: "OK?" }); done = true; break; }
+              if (!secErr) { console.log("REC_FORM_ERR " + JSON.stringify({ label, type: spec.type, cand, errLine })); results.push({ host: label, type: spec.type, cand, flag: "FORM_ERR", error: errLine }); done = true; break; }
             } catch (e) { console.log("RECORD_ERR " + JSON.stringify({ label, cand, error: e.message })); }
           }
         }
