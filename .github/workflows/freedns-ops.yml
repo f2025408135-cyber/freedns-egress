@@ -1,0 +1,34 @@
+name: freedns-ops
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "probe | signup | activate | resume | login_hosts | verify"
+        required: true
+        default: probe
+      payload_b64:
+        description: "base64 JSON payload"
+        required: false
+        default: ""
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: run phase
+        env:
+          PHASE: ${{ inputs.phase }}
+          PAYLOAD_B64: ${{ inputs.payload_b64 }}
+        run: node scripts/freedns-ops.mjs
+      - name: upload dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dumps-${{ inputs.phase }}-${{ github.run_id }}
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 14
