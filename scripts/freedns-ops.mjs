@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 const PHASE = (process.env.PHASE || "probe").trim();
 const PAYLOAD = (() => {
@@ -40,6 +41,16 @@ async function req(sess, url, opts = {}) {
   storeCookies(sess, res);
   const body = await res.text();
   return { status: res.status, url: res.url, server: res.headers.get("server") || "", ct: (res.headers.get("content-type") || "").split(";")[0], len: body.length, location: res.headers.get("location") || "", body };
+}
+
+async function reqBin(sess, url, opts = {}) {
+  const headers = { "User-Agent": UA, "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8", ...(opts.headers || {}) };
+  const ch = cookieHeader(sess);
+  if (ch) headers["Cookie"] = ch;
+  const res = await fetch(url, { method: opts.method || "GET", headers, redirect: opts.redirect || "follow", signal: AbortSignal.timeout(opts.timeout || 45000) });
+  storeCookies(sess, res);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { status: res.status, url: res.url, ct: (res.headers.get("content-type") || "").split(";")[0], buf };
 }
 
 function stripHtml(html) {
@@ -236,7 +247,7 @@ async function createHosts(addForm, listingHtml) {
   const results = [];
   for (const d of p.domains || []) {
     const opt = (p.blind_domain_id && null) || findOption(listingHtml, d.name);
-    const domainId = d.id || (opt && opt.value) || null;
+    const domainId = (opt && opt.value) || d.id || null;
     console.log("DOMAIN_OPT " + JSON.stringify({ name: d.name, found: opt, used: domainId }));
     if (!domainId) { console.log("DOMAIN_NO_ID " + d.name); results.push({ domain: d.name, error: "no-domain-id" }); continue; }
     for (const spec of recordSpecs) {
@@ -362,8 +373,22 @@ async function probe() {
   summary({ phase: "probe", ok: out.reach && out.reach.status === 200, out });
 }
 
+async function captcha() {
+  const su = await req("session", BASE + "/signup/");
+  fs.writeFileSync(OUT + "/signup.html", su.body);
+  console.log("SIGNUP_GET " + JSON.stringify({ status: su.status, len: su.len }));
+  const img = await reqBin("session", BASE + "/securimage/securimage_show.php");
+  fs.writeFileSync(OUT + "/captcha.png", img.buf);
+  const cookies = Object.fromEntries(jar("session").entries());
+  fs.writeFileSync(OUT + "/cookies.json", JSON.stringify(cookies, null, 2));
+  console.log("CAPTCHA_IMG " + JSON.stringify({ status: img.status, url: img.url, ct: img.ct, bytes: img.buf.length, md5: crypto.createHash("md5").update(img.buf).digest("hex") }));
+  console.log("COOKIES " + JSON.stringify(Object.keys(cookies)));
+  summary({ phase: "captcha", ok: img.status === 200 && img.buf.length > 500, bytes: img.buf.length });
+}
+
 async function signup() {
   const p = PAYLOAD;
+  if (p.cookies) { for (const [k, v] of Object.entries(p.cookies)) jar("session").set(k, v); }
   const su = await req("session", BASE + "/signup/");
   const forms = dumpForms(su.body);
   fs.writeFileSync(OUT + "/signup-before.html", su.body);
@@ -442,6 +467,7 @@ async function resume() {
 async function main() {
   console.log("PHASE=" + PHASE + " PAYLOAD_KEYS=" + JSON.stringify(Object.keys(PAYLOAD)));
   if (PHASE === "probe") await probe();
+  else if (PHASE === "captcha") await captcha();
   else if (PHASE === "signup") await signup();
   else if (PHASE === "activate") await activate();
   else if (PHASE === "resume") await resume();
