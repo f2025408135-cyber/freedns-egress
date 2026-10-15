@@ -588,12 +588,23 @@ async function audioprobe() {
   summary({ phase: "audioprobe", ok: true });
 }
 
-function spokenToChars(text) {
-  const map = { zero: "0", oh: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9",
-    a: "A", ay: "A", bee: "B", cee: "C", see: "C", dee: "D", ee: "E", eff: "F", gee: "G", aitch: "H", eye: "I", i: "I", jay: "J", kay: "K", ell: "L", el: "L", em: "M", en: "N", ohh: "O", pee: "P", cue: "Q", queue: "Q", arr: "R", are: "R", ar: "R", ess: "S", tee: "T", you: "U", u: "U", vee: "V", ex: "X", why: "Y", y: "Y", zee: "Z", zed: "Z", double: "W" };
-  const toks = String(text).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
-  let out = "";
-  for (const t of toks) { if (/^[a-z0-9]$/.test(t)) { out += t.toUpperCase(); } else if (map[t]) { out += map[t]; } }
+function spokenToCharsVariants(text) {
+  let t = String(text).toLowerCase();
+  t = t.replace(/double\s*[- ]?\s*(u|you|yu)\b/g, " w ");
+  const map = { zero: "0", oh: "0", ohh: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9",
+    a: "A", ay: "A", bee: "B", be: "B", cee: "C", see: "C", sea: "C", dee: "D", ee: "E", eff: "F", gee: "G", aitch: "H", haitch: "H", eye: "I", i: "I", jay: "J", kay: "K", ell: "L", el: "L", em: "M", en: "N", owe: "O", pee: "P", pea: "P", pi: "P", cue: "Q", queue: "Q", arr: "R", are: "R", ar: "R", ess: "S", es: "S", tee: "T", tea: "T", you: "U", u: "U", ewe: "U", vee: "V", ex: "X", why: "Y", y: "Y", zee: "Z", zed: "Z" };
+  const toks = t.replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  const strict = [];
+  const split = [];
+  for (const tok of toks) {
+    if (/^[a-z0-9]$/.test(tok)) { strict.push(tok); split.push(tok); continue; }
+    if (map[tok]) { strict.push(map[tok]); split.push(map[tok]); continue; }
+    if (/^[a-z0-9]{2,6}$/.test(tok)) { for (const ch of tok) split.push(ch); }
+  }
+  const up = (arr) => arr.join("").toUpperCase();
+  const a = up(strict), b = up(split);
+  const out = [a];
+  if (b !== a) out.push(b);
   return out;
 }
 
@@ -641,13 +652,24 @@ async function audioflow() {
       if (aud.status !== 200 || aud.buf.length < 1000) { await sleep(1500); continue; }
       const stt = await speechmaticsSTT(aud.buf, key);
       console.log("AUDIO_STT " + JSON.stringify({ s: i + 1, r, jobId: stt.id || null, text: (stt.text || "").replace(/\s+/g, " ").slice(0, 220), err: stt.err || null }));
-      const code = stt.text ? spokenToChars(stt.text) : "";
-      console.log("AUDIO_CODE " + JSON.stringify({ s: i + 1, r, code }));
-      if (code.length < 4 || code.length > 8) { await sleep(1500); continue; }
-      const v = await flowPostCode(jarName, code, p);
-      console.log("AUDIO_VERDICT " + JSON.stringify({ s: i + 1, r, code, okGuess: v.okGuess, captchaErr: v.captchaErr, status: v.status }));
-      if (v.okGuess) { won = { s: i + 1, r, code }; break; }
-      if (!v.captchaErr) { summary({ phase: "audioflow", ok: false, reason: "non-captcha-failure", text: v.text }); return; }
+      const variants = stt.text ? spokenToCharsVariants(stt.text) : [];
+      console.log("AUDIO_VARIANTS " + JSON.stringify({ s: i + 1, r, variants }));
+      const cands = [];
+      for (const v of variants) {
+        if (!v) continue;
+        cands.push(v);
+        if (/O/.test(v)) cands.push(v.replace(/O/g, "0"));
+        if (/0/.test(v)) cands.push(v.replace(/0/g, "O"));
+      }
+      const uniq = [...new Set(cands)].filter((c) => c.length >= 4 && c.length <= 8).slice(0, 4);
+      for (const code of uniq) {
+        const v = await flowPostCode(jarName, code, p);
+        console.log("AUDIO_VERDICT " + JSON.stringify({ s: i + 1, r, code, okGuess: v.okGuess, captchaErr: v.captchaErr, status: v.status }));
+        if (v.okGuess) { won = { s: i + 1, r, code }; break; }
+        if (!v.captchaErr) { summary({ phase: "audioflow", ok: false, reason: "non-captcha-failure", text: v.text }); return; }
+        await sleep(1800);
+      }
+      if (won) break;
       await sleep(2200);
     }
   }
