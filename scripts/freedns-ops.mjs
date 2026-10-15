@@ -230,13 +230,16 @@ async function loginAndHosts({ username, password }) {
   const ok = !/FreeDNS Login!|You must enable cookies|Problems!|Oops!/i.test(ct);
   console.log("LOGGED_IN " + JSON.stringify({ ok, status: check.status, len: check.len, jar: Object.fromEntries(jar("session")) }));
   if (!ok) { summary({ phase: "login_hosts", ok: false, reason: "login-failed" }); return; }
-  const forms2 = dumpForms(check.body);
-  console.log("SUBDOMAIN_FORMS " + JSON.stringify(forms2, null, 2));
+  const edit = await req("session", BASE + "/subdomain/edit.php", { logCookies: true });
+  fs.writeFileSync(OUT + "/edit.html", edit.body);
+  console.log("EDIT_PAGE " + JSON.stringify({ status: edit.status, url: edit.url, len: edit.len }));
+  const forms2 = dumpForms(edit.body);
+  console.log("EDIT_FORMS " + JSON.stringify(forms2, null, 2));
   const addForm = forms2.find((x) => x.fields.some((y) => /^subdomain$/i.test(y.name)) && x.fields.some((y) => /type/i.test(y.name))) ||
     forms2.find((x) => x.fields.some((y) => /address|destination|dest/i.test(y.name)));
   console.log("ADD_FORM " + (addForm ? JSON.stringify({ action: addForm.action, method: addForm.method, id: addForm.id }) : "NOT_FOUND"));
   if (!addForm) { summary({ phase: "login_hosts", ok: false, reason: "no-add-form", loggedIn: true }); return; }
-  await createHosts(addForm, check.body);
+  await createHosts(addForm, edit.body);
 }
 
 async function createHosts(addForm, listingHtml) {
@@ -260,7 +263,7 @@ async function createHosts(addForm, listingHtml) {
       for (const ff of addForm.fields) {
         if (!ff.name) continue;
         if (ff.kind === "input") {
-          if (["submit", "button", "image", "reset", "checkbox", "radio"].includes(ff.type)) continue;
+          if (["button", "image", "reset", "checkbox", "radio"].includes(ff.type)) continue;
           params.set(ff.name, ff.value || "");
         } else if (ff.kind === "select") {
           const sel = ff.options.find((o) => o.selected) || ff.options[0];
@@ -278,7 +281,7 @@ async function createHosts(addForm, listingHtml) {
         else if (/^domain$/.test(n)) params.set(ff.name, domainId);
         else if (/address|destination|dest|content|^value$|target/.test(n)) params.set(ff.name, spec.address);
       }
-      await sleep(1600);
+      await sleep(2200);
       const label = (d.host || "mail") + "." + d.name;
       try {
         const post = await req("session", action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/subdomain/" }, body: params.toString() });
