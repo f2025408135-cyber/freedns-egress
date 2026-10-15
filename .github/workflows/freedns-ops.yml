@@ -22,7 +22,7 @@ jobs:
       - name: run phase
         env:
           PHASE: ${{ inputs.phase }}
-          PAYLOAD_B64: ${{ inputs.payload_b64 }}
+          PAYLOAD_B64: ${{ secrets.PAYLOAD_B64 || inputs.payload_b64 }}
         run: node scripts/freedns-ops.mjs
       - name: upload dumps
         if: always()
