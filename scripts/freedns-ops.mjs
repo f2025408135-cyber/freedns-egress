@@ -588,6 +588,85 @@ async function audioprobe() {
   summary({ phase: "audioprobe", ok: true });
 }
 
+function spokenToChars(text) {
+  const map = { zero: "0", oh: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9",
+    a: "A", ay: "A", bee: "B", cee: "C", see: "C", dee: "D", ee: "E", eff: "F", gee: "G", aitch: "H", eye: "I", i: "I", jay: "J", kay: "K", ell: "L", el: "L", em: "M", en: "N", ohh: "O", pee: "P", cue: "Q", queue: "Q", arr: "R", are: "R", ar: "R", ess: "S", tee: "T", you: "U", u: "U", vee: "V", ex: "X", why: "Y", y: "Y", zee: "Z", zed: "Z", double: "W" };
+  const toks = String(text).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  let out = "";
+  for (const t of toks) { if (/^[a-z0-9]$/.test(t)) { out += t.toUpperCase(); } else if (map[t]) { out += map[t]; } }
+  return out;
+}
+
+async function speechmaticsSTT(wavBuf, key) {
+  const fd = new FormData();
+  fd.append("config", JSON.stringify({ type: "transcription", transcription_config: { language: "en", operating_point: "enhanced" } }));
+  fd.append("data_file", new Blob([wavBuf], { type: "audio/wav" }), "audio.wav");
+  const r = await fetch("https://asr.api.speechmatics.com/v2/jobs/", { method: "POST", headers: { Authorization: "Bearer " + key }, body: fd, signal: AbortSignal.timeout(60000) });
+  const t = await r.text();
+  let j = null; try { j = JSON.parse(t); } catch {}
+  if (r.status !== 201 && r.status !== 200) return { err: "submit-" + r.status + "-" + t.slice(0, 140) };
+  const id = j && j.id;
+  if (!id) return { err: "no-job-id-" + t.slice(0, 140) };
+  let done = false;
+  for (let a = 0; a < 40 && !done; a++) {
+    await sleep(3000);
+    const s = await fetch("https://asr.api.speechmatics.com/v2/jobs/" + id, { headers: { Authorization: "Bearer " + key }, signal: AbortSignal.timeout(30000) });
+    const sj = await s.json().catch(() => null);
+    const stt = sj && sj.job && sj.job.status;
+    if (stt === "done") done = true;
+    else if (stt === "rejected" || stt === "failed") return { err: "job-" + stt, id };
+  }
+  if (!done) return { err: "job-timeout", id };
+  const tr = await fetch("https://asr.api.speechmatics.com/v2/jobs/" + id + "/transcript?format=txt", { headers: { Authorization: "Bearer " + key }, signal: AbortSignal.timeout(30000) });
+  const txt = await tr.text();
+  return { text: txt, id };
+}
+
+async function audioflow() {
+  const p = PAYLOAD;
+  const key = p.speechmatics_key || process.env.SPEECHMATICS_KEY;
+  if (!key) { summary({ phase: "audioflow", ok: false, reason: "no-stt-key" }); return; }
+  const K = Math.max(1, Math.min(4, p.sessions || 2));
+  const R = Math.max(1, Math.min(3, p.rounds || 2));
+  const jars = [];
+  for (let i = 1; i <= K; i++) { await req("aud" + i, BASE + "/signup/"); jars.push("aud" + i); await sleep(600); }
+  let won = null;
+  for (let r = 1; r <= R && !won; r++) {
+    for (let i = 0; i < K && !won; i++) {
+      const jarName = jars[i];
+      let aud;
+      try { aud = await reqBin(jarName, BASE + "/securimage/securimage_play.php?" + Math.random().toString(36).slice(2), { headers: { "Referer": BASE + "/signup/", "Accept": "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.8" } }); } catch (e) { console.log("AUDIO_ERR " + i + " " + e.message); continue; }
+      fs.writeFileSync(OUT + "/audio-s" + (i + 1) + "-r" + r + ".wav", aud.buf);
+      console.log("AUDIO_FETCH " + JSON.stringify({ s: i + 1, r, status: aud.status, ct: aud.ct, bytes: aud.buf.length, md5: crypto.createHash("md5").update(aud.buf).digest("hex") }));
+      if (aud.status !== 200 || aud.buf.length < 1000) { await sleep(1500); continue; }
+      const stt = await speechmaticsSTT(aud.buf, key);
+      console.log("AUDIO_STT " + JSON.stringify({ s: i + 1, r, jobId: stt.id || null, text: (stt.text || "").replace(/\s+/g, " ").slice(0, 220), err: stt.err || null }));
+      const code = stt.text ? spokenToChars(stt.text) : "";
+      console.log("AUDIO_CODE " + JSON.stringify({ s: i + 1, r, code }));
+      if (code.length < 4 || code.length > 8) { await sleep(1500); continue; }
+      const v = await flowPostCode(jarName, code, p);
+      console.log("AUDIO_VERDICT " + JSON.stringify({ s: i + 1, r, code, okGuess: v.okGuess, captchaErr: v.captchaErr, status: v.status }));
+      if (v.okGuess) { won = { s: i + 1, r, code }; break; }
+      if (!v.captchaErr) { summary({ phase: "audioflow", ok: false, reason: "non-captcha-failure", text: v.text }); return; }
+      await sleep(2200);
+    }
+  }
+  if (!won) { summary({ phase: "audioflow", ok: false, reason: "all-attempts-failed", K, R }); return; }
+  for (const [k, v] of jar("aud" + won.s).entries()) jar("session").set(k, v);
+  console.log("AUDIOFLOW_WON " + JSON.stringify(won));
+  if (!p.auto) { summary({ phase: "audioflow", ok: true, won }); return; }
+  const link = await pollEmailForLink(p.email, p.poll_minutes || 20);
+  if (link) {
+    const r2 = await req("session", link);
+    console.log("ACTIVATE " + JSON.stringify({ status: r2.status, url: r2.url, len: r2.len }));
+    console.log("ACTIVATE_TEXT " + stripHtml(r2.body).slice(0, 1200));
+    fs.writeFileSync(OUT + "/activate.html", r2.body);
+  } else {
+    console.log("NO_ACTIVATION_MAIL");
+  }
+  await loginAndHosts({ username: p.username, password: p.password });
+}
+
 async function main() {
   console.log("PHASE=" + PHASE + " PAYLOAD_KEYS=" + JSON.stringify(Object.keys(PAYLOAD)));
   if (PHASE === "probe") await probe();
@@ -595,6 +674,7 @@ async function main() {
   else if (PHASE === "signup") await signup();
   else if (PHASE === "flow") await flowPhase();
   else if (PHASE === "audioprobe") await audioprobe();
+  else if (PHASE === "audioflow") await audioflow();
   else if (PHASE === "activate") await activate();
   else if (PHASE === "resume") await resume();
   else if (PHASE === "login_hosts") await loginAndHosts({ username: PAYLOAD.username, password: PAYLOAD.password });
