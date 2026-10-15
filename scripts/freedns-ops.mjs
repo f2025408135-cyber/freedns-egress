@@ -712,30 +712,33 @@ async function audioflow() {
 
 async function logindbg() {
   const p = PAYLOAD;
-  const g = await req("dbg", BASE + "/zc.php", { logCookies: true });
-  console.log("DBG_G " + JSON.stringify({ status: g.status, url: g.url, len: g.len, jar: Object.fromEntries(jar("dbg")) }));
-  const params = new URLSearchParams();
-  params.set("username", p.email || p.username);
-  params.set("password", p.password);
-  params.set("remember", "1");
-  params.set("submit", "Login");
-  params.set("remote", "");
-  params.set("from", "");
-  params.set("action", "auth");
-  const post = await req("dbg", BASE + "/zc.php?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php", "Origin": BASE }, body: params.toString(), logCookies: true });
-  console.log("DBG_POST " + JSON.stringify({ status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar("dbg")) }));
-  console.log("DBG_POST_TEXT " + stripHtml(post.body).slice(0, 500));
-  try {
-    const js = await req("dbg", BASE + "/include/script1.js");
-    fs.writeFileSync(OUT + "/script1.js", js.body);
-    console.log("DBG_JS " + JSON.stringify({ status: js.status, len: js.len, head: js.body.slice(0, 160) }));
-  } catch (e) { console.log("DBG_JS_ERR " + e.message); }
-  const nc = await req("dbg", BASE + "/nocookie/");
-  fs.writeFileSync(OUT + "/nocookie.html", nc.body);
-  console.log("DBG_NOCOOKIE " + JSON.stringify({ status: nc.status, len: nc.len, text: stripHtml(nc.body).slice(0, 400) }));
-  const sd = await req("dbg", BASE + "/subdomain/");
-  const sdt = stripHtml(sd.body);
-  console.log("DBG_SD " + JSON.stringify({ status: sd.status, len: sd.len, looksLogin: /FreeDNS Login!/i.test(sdt), head: sdt.slice(0, 200) }));
+  const cases = [
+    { name: "A-securimage", warm: ["/securimage/securimage_show.php", "/zc.php"] },
+    { name: "B-step1", warm: ["/zc.php?step=1"] },
+    { name: "C-step2", warm: ["/zc.php?step=2"] },
+  ];
+  for (const cs of cases) {
+    const jn = "dbg-" + cs.name;
+    for (const w of cs.warm) {
+      const g = await req(jn, BASE + w, { logCookies: true });
+      console.log("DBG_WARM " + JSON.stringify({ case: cs.name, url: w, status: g.status, len: g.len, jar: Object.fromEntries(jar(jn)) }));
+    }
+    const params = new URLSearchParams();
+    params.set("username", p.email || p.username);
+    params.set("password", p.password);
+    params.set("remember", "1");
+    params.set("submit", "Login");
+    params.set("remote", "");
+    params.set("from", "");
+    params.set("action", "auth");
+    const post = await req(jn, BASE + "/zc.php?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/zc.php", "Origin": BASE }, body: params.toString(), logCookies: true });
+    const pt = stripHtml(post.body);
+    console.log("DBG_POST " + JSON.stringify({ case: cs.name, status: post.status, url: post.url, loc: post.location, len: post.len, jar: Object.fromEntries(jar(jn)), head: pt.slice(0, 180) }));
+    const sd = await req(jn, BASE + "/subdomain/");
+    const sdt = stripHtml(sd.body);
+    console.log("DBG_SD " + JSON.stringify({ case: cs.name, status: sd.status, len: sd.len, looksLogin: /FreeDNS Login!/i.test(sdt), ok: !/FreeDNS Login!|You must enable cookies|Oops!/i.test(sdt) }));
+    await sleep(1000);
+  }
   summary({ phase: "logindbg", ok: true });
 }
 
