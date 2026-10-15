@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "probe | signup | activate | resume | login_hosts | verify"
+        description: "probe | captcha | signup | flow | activate | resume | login_hosts | verify"
         required: true
         default: probe
       payload_b64:
@@ -23,6 +23,7 @@ jobs:
         env:
           PHASE: ${{ inputs.phase }}
           PAYLOAD_B64: ${{ secrets.PAYLOAD_B64 || inputs.payload_b64 }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
         run: node scripts/freedns-ops.mjs
       - name: upload dumps
         if: always()

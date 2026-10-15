@@ -473,11 +473,87 @@ async function resume() {
   await loginAndHosts({ username: p.username, password: p.password });
 }
 
+async function geminiReadImage(b64) {
+  const key = process.env.GEMINI_KEY;
+  if (!key) return { status: 0, err: "no-key" };
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent";
+  const body = JSON.stringify({ contents: [{ parts: [{ text: "Transcribe the characters in this image exactly as shown. Output only the characters." }, { inline_data: { mime_type: "image/png", data: b64 } }] }] });
+  const r = await fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(60000) });
+  const t = await r.text();
+  let j = null; try { j = JSON.parse(t); } catch {}
+  if (r.status !== 200 || !j || !j.candidates) return { status: r.status, err: t.slice(0, 160) };
+  const parts = (j.candidates[0].content && j.candidates[0].content.parts) || [];
+  return { status: r.status, text: parts.map((x) => x.text || "").join("").trim() };
+}
+
+async function flowPostCode(jarName, code, p) {
+  const names = ["firstname", "lastname", "username", "password", "password2", "email", "captcha_code", "PROCID", "TRANSPRE", "action"];
+  const params = new URLSearchParams();
+  for (const n of names) params.set(n, "");
+  const merged = { ...(p.fields || {}), captcha_code: code };
+  for (const [k, v] of Object.entries(merged)) { if (params.has(k) || p.allow_extra_fields) params.set(k, String(v)); }
+  for (const [k, v] of Object.entries(p.extra_fields || {})) params.set(k, String(v));
+  const post = await req(jarName, BASE + "/signup/?step=2", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": BASE + "/signup/" }, body: params.toString() });
+  fs.writeFileSync(OUT + "/flow-post-last.html", post.body);
+  const text = stripHtml(post.body);
+  const okGuess = /check your email|activation|welcome|success|created|thank|has been sent/i.test(text) && !/already (taken|in use|registered)|invalid|incorrect|failed|must be|try again/i.test(text);
+  const captchaErr = /security code|captcha/i.test(text) && /incorrect|invalid|does not match|wrong|try again/i.test(text);
+  return { okGuess, captchaErr, status: post.status, url: post.url, text: redact(text.slice(0, 900), p.password) };
+}
+
+async function flowPhase() {
+  const p = PAYLOAD;
+  const K = Math.max(1, Math.min(6, p.sessions || 3));
+  const R = Math.max(1, Math.min(5, p.rounds || 3));
+  const list = [];
+  for (let i = 1; i <= K; i++) {
+    const jarName = "flow" + i;
+    await req(jarName, BASE + "/signup/");
+    list.push(jarName);
+    await sleep(700);
+  }
+  let won = null;
+  for (let r = 1; r <= R && !won; r++) {
+    for (let i = 0; i < K && !won; i++) {
+      const jarName = list[i];
+      let img;
+      try { img = await reqBin(jarName, BASE + "/securimage/securimage_show.php?" + Math.random().toString(36).slice(2)); } catch (e) { console.log("FLOW_IMG_ERR " + i + " " + e.message); continue; }
+      fs.writeFileSync(OUT + "/flow-cap-s" + (i + 1) + "-r" + r + ".png", img.buf);
+      const md5 = crypto.createHash("md5").update(img.buf).digest("hex");
+      let read = await geminiReadImage(img.buf.toString("base64"));
+      for (let a = 0; a < 2 && (!read || read.status !== 200); a++) { await sleep(8000); read = await geminiReadImage(img.buf.toString("base64")); }
+      const code = read && read.text ? read.text.replace(/[^A-Za-z0-9]/g, "") : "";
+      console.log("FLOW_READ " + JSON.stringify({ s: i + 1, r, md5, gStatus: read && read.status, raw: (read && (read.text || read.err)) || null, code }));
+      if (code.length < 3 || code.length > 8) { await sleep(1200); continue; }
+      const v = await flowPostCode(jarName, code, p);
+      console.log("FLOW_VERDICT " + JSON.stringify({ s: i + 1, r, code, okGuess: v.okGuess, captchaErr: v.captchaErr, status: v.status, url: v.url }));
+      if (v.okGuess) { won = { s: i + 1, r, code }; break; }
+      if (!v.captchaErr) { summary({ phase: "flow", ok: false, reason: "non-captcha-failure", s: i + 1, r, text: v.text }); return; }
+      await sleep(2200);
+    }
+  }
+  if (!won) { summary({ phase: "flow", ok: false, reason: "all-attempts-failed", K, R }); return; }
+  for (const [k, v] of jar("flow" + won.s).entries()) jar("session").set(k, v);
+  console.log("FLOW_WON " + JSON.stringify(won));
+  if (!p.auto) { summary({ phase: "flow", ok: true, won }); return; }
+  const link = await pollEmailForLink(p.email, p.poll_minutes || 20);
+  if (link) {
+    const r2 = await req("session", link);
+    console.log("ACTIVATE " + JSON.stringify({ status: r2.status, url: r2.url, len: r2.len }));
+    console.log("ACTIVATE_TEXT " + stripHtml(r2.body).slice(0, 1200));
+    fs.writeFileSync(OUT + "/activate.html", r2.body);
+  } else {
+    console.log("NO_ACTIVATION_MAIL");
+  }
+  await loginAndHosts({ username: p.username, password: p.password });
+}
+
 async function main() {
   console.log("PHASE=" + PHASE + " PAYLOAD_KEYS=" + JSON.stringify(Object.keys(PAYLOAD)));
   if (PHASE === "probe") await probe();
   else if (PHASE === "captcha") await captcha();
   else if (PHASE === "signup") await signup();
+  else if (PHASE === "flow") await flowPhase();
   else if (PHASE === "activate") await activate();
   else if (PHASE === "resume") await resume();
   else if (PHASE === "login_hosts") await loginAndHosts({ username: PAYLOAD.username, password: PAYLOAD.password });
